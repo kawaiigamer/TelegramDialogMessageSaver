@@ -6,78 +6,71 @@ namespace TelegramDialogMessageSaver
 {
     internal class MainAccountHandler
     {
-        private readonly SemaphoreSlim Semaphore = new SemaphoreSlim(MAX_DOWNLOADS);
-        private readonly TelegramAccountInterractionData LoginData;
-        
+        private SemaphoreSlim Semaphore;
+        private MainAccountHandlerSettings Settings;
         private UpdateManager Manager;
-        private Client Client;      
-
-        private const int MAX_DOWNLOADS = 16;
-        private const int MAX_SYMBOLS_FOR_DISPLAY = 128;
-        private const string DATETIME_FORMAT = "dd.MM.yyyy HH:mm:ss";
-        private static Dictionary<string, int> LIMITS_MB = new()
-        {
-            { "/ogg", 24},
-            { "webp", 4},
-            { "/mp4", 64},
-            { ".mp3", 32},
-            { ".mp4", 96},
-            { ".pdf", 96},
-            //{ ".7z", 196},
-            { ".zip", 196},
-            { ".rar", 196},
-            { ".png", 36},
-            { ".apk", 0},
-            { ".exe", 0},
-            { "other", 12}
-        };
-
+        private Client Client; 
         private TL.User? GetUserByID(long id) => Manager.Users.TryGetValue(id, out var user) ? user : null;
-        private static bool IsIndividualChat(Peer peer) => peer is PeerUser;
-        private static string ReduceStr(string str) => str.Length <= MAX_SYMBOLS_FOR_DISPLAY ? str : $"{str.Substring(0, MAX_SYMBOLS_FOR_DISPLAY)}.....";
-        private static void Log(string msg) => Console.WriteLine($"[{DateTime.Now.ToString(DATETIME_FORMAT)}] {ReduceStr(msg)}");
+        private TL.ChatBase? GetChannelByID(long id) => Manager.Chats.TryGetValue(id, out var channel) ? channel : null;
+        private bool IsIndividualChat(Peer peer) => peer is PeerUser;
+        private bool IsChannel(Peer peer) => peer is PeerChat || peer is PeerChannel;
+        private string ReduceStr(string str) => str.Length <= Settings.MAX_SYMBOLS_FOR_DISPLAY ? str : $"{str.Substring(0, Settings.MAX_SYMBOLS_FOR_DISPLAY)}.....";
+        private void Log(string msg) => Console.WriteLine($"[{DateTime.Now.ToString(Settings.DATETIME_FORMAT)}] {ReduceStr(msg)}");
+        private bool IsOverMaxSize(string media_type, long doc_size) => doc_size > (Settings.LIMITS_MB.TryGetValue(GetExnensionOrDefault(media_type), out int max_size) ? max_size : Settings.LIMITS_MB["other"]) * 1024 * 1024;
 
-        private static bool IsOverMaxSize(string media_type, long doc_size) => doc_size > (LIMITS_MB.TryGetValue(media_type[^4..], out int max_size) ? max_size : LIMITS_MB["other"]) * 1024 * 1024;
-
-        public MainAccountHandler(TelegramAccountInterractionData data)
+        private static string GetExnensionOrDefault(string media_type)
         {
-            LoginData = data;
-        }
+            int index_point = media_type.LastIndexOf(".");
+            if (index_point == -1)
+            {
+                return media_type;
+            }
+            return media_type.Substring(index_point);
+        }        
 
-        public async Task LoginTGAsync()
+        public async Task LoginTGAsync(TelegramAccountInterractionData login_data)
         {
-            Client = new WTelegram.Client(LoginData.api_id, LoginData.api_hash);
-            await DoLogin(LoginData.phone);
+            Client = new WTelegram.Client(login_data.api_id, login_data.api_hash);
+            await DoLogin(login_data.phone);
             Manager = Client.WithUpdateManager(OnUpdateHandler);
 
-            async Task DoLogin(string loginInfo)
+            async Task DoLogin(string login_info)
             {
                 while (Client.User == null)
                 {
-                    switch (await Client.Login(loginInfo))
+                    switch (await Client.Login(login_info))
                     {
-                        case "verification_code": Console.Write("Code: "); loginInfo = Console.ReadLine(); break;
-                        case "name": loginInfo = LoginData.api_hash; break;
-                        case "password": loginInfo = LoginData.F2A_password; break;
-                        default: loginInfo = null; break;
-                    }
-                    Log($"We are logged-in as {Client.User}, ID: {Client.User?.id}");
+                        case "verification_code":
+                            Console.Write("Code: ");
+                            login_info = Console.ReadLine();
+                            break;
+                        case "name":
+                            login_info = login_data.api_hash;
+                            break;
+                        case "password":
+                            login_info = login_data.F2A_password;
+                            break;
+                        default:
+                            login_info = null;
+                            break;
+                    }                    
                 }
             }
         }
 
-        public async Task StartPollingAsync(CancellationToken ct = default)
+        public async Task StartPollingAsync(MainAccountHandlerSettings settings, CancellationToken ct = default)
         {
+            Settings = settings;
+            Semaphore = new SemaphoreSlim(Settings.MAX_DOWNLOADS);
             try
             {
+                Log($"We are logged-in as {Client.User}, ID: {Client.User?.id}");
                 await Task.Delay(Timeout.Infinite, ct);
             }
-            catch (OperationCanceledException)
-            {
-            }
+            catch (OperationCanceledException) {}
         }
 
-        private bool GetMessageInfo(MessageBase mb, out Message? message, out long from_user_id)
+        private bool GetIndividualChatMessageInfo(MessageBase mb, out Message? message, out long from_user_id)
         {
             message = mb as Message;
             if (message == null)
@@ -86,12 +79,32 @@ namespace TelegramDialogMessageSaver
                 return false;
             }
             from_user_id = message.peer_id.ID;
-            return from_user_id != 0 && IsIndividualChat(message.peer_id);
+            if (IsIndividualChat(message.peer_id))
+            {
+                return Settings.CHATS_IDS == null || Settings.CHATS_IDS.Contains(from_user_id);
+            } 
+            return false;     
         }
 
+        private bool GetChannelMessageInfo(MessageBase mb, out Message? message, out long from_user_id, out long from_channel_id)
+        {
+            message = mb as Message;
+            if (message == null)
+            {
+                from_user_id = from_channel_id = 0;
+                return false;
+            }
+            from_user_id = message.from_id.ID;
+            from_channel_id = message.peer_id.ID;
+            if (IsChannel(message.peer_id))
+            {
+                return Settings.CHANNELS_IDS == null || Settings.CHANNELS_IDS.Contains(from_channel_id);
+            }
+            return false;
+        }
         private InternalUser BuildUser(long id)
         {
-            InternalUser sender = new() { user_id = id, messages = [] };
+            InternalUser sender = new() { user_id = id };
 
             TL.User? sender_profile = GetUserByID(id);
             if (sender_profile != null)
@@ -114,29 +127,28 @@ namespace TelegramDialogMessageSaver
             }
             finally
             {
-                Console.WriteLine($"Releasing download documents semaphore, {Semaphore.Release()}\\{MAX_DOWNLOADS} slots empty");
+                Console.WriteLine($"Releasing download documents semaphore, {Semaphore.Release()}\\{Settings.MAX_DOWNLOADS} slots empty");
             }
         }       
 
         private async Task<InternalUserMessage> BuildUserMessage(ApplicationStorageContext db, Message message)
         {            
-            InternalUserMessage sender_message = new()
+            InternalUserMessage new_message = new()
             {
                 direction = message.flags.HasFlag(Message.Flags.out_) ? InternalUserMessageDirection.OUTGOING : InternalUserMessageDirection.INCOMING,
                 text = message.message,
                 date = DateTime.Now,
                 reply_msg_id = message.ReplyHeader != null ? message.ReplyHeader.reply_to_msg_id : 0,
-                forward_from = message.fwd_from != null ? message.fwd_from.from_id?.ID : 0,
+                forwarded_from = message.fwd_from != null ? message.fwd_from.from_id?.ID : 0,
                 dialog_id = message.id
             };
-
             switch (message.media)
             {
                 case TL.MessageMediaDocument:
                     if (message.media is TL.MessageMediaDocument { document: Document doc })
                     {
-                        sender_message.media_hash = doc.access_hash;
-                        if (!db.IsMediaHashExists(sender_message.media_hash))
+                        new_message.media_hash = doc.access_hash;
+                        if (!db.IsMediaHashExists(new_message.media_hash))
                         {
                             string media_type = doc.Filename ?? doc.mime_type;
                             if (IsOverMaxSize(media_type, doc.size))
@@ -144,29 +156,28 @@ namespace TelegramDialogMessageSaver
                                 Log($"Recived MessageMediaDocument is too big for it type {media_type} - {doc.size} bytes");
                                 break;
                             }
-                            InternalUserMessageMedia media = new() { hash = sender_message.media_hash, media_type = media_type, media = await DownloadDocument(async (memory_stream) => await Client.DownloadFileAsync(doc, memory_stream)) };
+                            InternalUserMessageMedia media = new() { hash = new_message.media_hash, media_type = media_type, media = await DownloadDocument(async (memory_stream) => await Client.DownloadFileAsync(doc, memory_stream)) };
                             db.Media.Add(media);
-                            Log($"Reciving MessageMediaDocument: {media.media_type} - {sender_message.media_hash}");
+                            Log($"Reciving MessageMediaDocument: {media.media_type} - {new_message.media_hash}");
                         } else
                         {
-                            Log($"Recived already saved MessageMediaDocument: {sender_message.media_hash}");
+                            Log($"Recived already saved MessageMediaDocument: {new_message.media_hash}");
                         }
-                    }
-                    
+                    }                    
                     break;
 
                 case TL.MessageMediaPhoto:
                     if (message.media is TL.MessageMediaPhoto { photo: Photo photo })
                     {
-                        sender_message.media_hash = photo.access_hash;
-                        if (!db.IsMediaHashExists(sender_message.media_hash))
+                        new_message.media_hash = photo.access_hash;
+                        if (!db.IsMediaHashExists(new_message.media_hash))
                         {
-                            InternalUserMessageMedia media = new(){ hash = sender_message.media_hash, media_type = "photo", media = await DownloadDocument(async (memory_stream) => await Client.DownloadFileAsync(photo, memory_stream)) };
+                            InternalUserMessageMedia media = new(){ hash = new_message.media_hash, media_type = "photo", media = await DownloadDocument(async (memory_stream) => await Client.DownloadFileAsync(photo, memory_stream)) };
                             db.Media.Add(media);
-                            Log($"Reciving new photo: {sender_message.media_hash}");
+                            Log($"Reciving new photo: {new_message.media_hash}");
                         } else
                         {
-                            Log($"Recived already saved photo: {sender_message.media_hash}");
+                            Log($"Recived already saved photo: {new_message.media_hash}");
                         }
                     }
                     break;
@@ -178,7 +189,7 @@ namespace TelegramDialogMessageSaver
                     Log($"Unknown media: {message.media?.GetType()}");
                     break;
             }
-            return sender_message;
+            return new_message;
         }
 
         private InternalUser GetOrAddUser(ApplicationStorageContext db, long user_id)
@@ -190,67 +201,77 @@ namespace TelegramDialogMessageSaver
                 Log($"Adding new user to database: {user_id}, {sender.username}, {sender.name}, {sender.info}");
                 db.Users.Add(sender);
             }
-            if (sender.messages == null)
-            {
-                sender.messages = [];
-            }
             return sender;
+        }
+
+        private async Task SaveNewMessage(MessageBase mb)
+        {
+            if (!GetIndividualChatMessageInfo(mb, out Message? message, out long from_chat_id))
+            {
+                return;
+            }
+            Log($"New message in chat ID: {from_chat_id}, Text: {message!.message}");
+            using (ApplicationStorageContext db = new(Settings.DATABASE_PATH))
+            {
+                InternalUser sender = GetOrAddUser(db, from_chat_id);
+                InternalUserMessage new_message = await BuildUserMessage(db, message);
+                new_message.from_user = sender;
+                db.Messages.Add(new_message);
+                db.SaveChanges();
+            }
+        }
+
+        private async Task SaveNewChannelMessage(MessageBase mb)
+        {
+            if (!GetChannelMessageInfo(mb, out Message? channel_message, out long from_channel_user_id, out long from_channel_id))
+            {
+                return;
+            }
+            Log($"New message in channel ID: {from_channel_id}, from user ID: {from_channel_user_id}, Text: {channel_message!.message}");
+            using (ApplicationStorageContext db = new(Settings.DATABASE_PATH))
+            {
+                InternalChannel? channel = db.Channels.Where(x => x.chnnel_id == from_channel_id).FirstOrDefault();
+                if (channel == null)
+                {
+                    var channel_data = GetChannelByID(from_channel_id);
+                    channel = new InternalChannel() { chnnel_id = channel_data.ID, title = channel_data.Title, username = channel_data.MainUsername, type = channel_data.IsChannel ? InternalChannelType.CHANNEL : InternalChannelType.GROUP };
+                    Log($"Adding new {channel.type} to database: {channel.chnnel_id}, {channel.title}, {channel.username}");
+                    db.Channels.Add(channel);
+                }
+                InternalUser sender = GetOrAddUser(db, from_channel_user_id);
+                InternalUserMessage new_message = await BuildUserMessage(db, channel_message);
+                new_message.from_user = sender;
+                new_message.from_channel = channel;
+                db.Messages.Add(new_message);
+                db.SaveChanges();
+            }
         }
 
         private async Task OnUpdateHandler(Update update)
         {
             switch (update)
             {
+                case UpdateNewChannelMessage msg:
+                    await SaveNewChannelMessage(msg.message);
+                    break;
+
+                case UpdateEditChannelMessage msg:
+                    await SaveNewChannelMessage(msg.message);
+                    break;
+
                 case UpdateNewMessage msg:
-                    if (!GetMessageInfo(msg.message, out Message? message, out long from_user_id))
-                    {
-                        break;
-                    }
-                    Log($"New message in chat ID: {from_user_id}, Text: {message!.message}");
-
-                    using (ApplicationStorageContext db = new ApplicationStorageContext())
-                    {
-                        InternalUser sender = GetOrAddUser(db, from_user_id);
-
-                        InternalUserMessage sender_message = await BuildUserMessage(db, message);
-
-                        sender.messages.Add(sender_message);
-                        db.SaveChanges();
-                    }
+                    await SaveNewMessage(msg.message);
                     break;
 
                 case UpdateEditMessage msg:
-                    if (!GetMessageInfo(msg.message, out Message? edited_message, out long edited_message_from_user_id))
-                    {
-                        break;
-                    }
-                    Log($"Message edited in chat ID: {edited_message_from_user_id}, Text: {edited_message!.message}");
-
-                    using (ApplicationStorageContext db = new ApplicationStorageContext())
-                    {
-                        InternalUser sender = GetOrAddUser(db, edited_message_from_user_id);
-
-                        InternalUserMessage? target_message = sender.messages.Where(x => x.dialog_id == edited_message_from_user_id).FirstOrDefault();
-                        if (target_message == null)
-                        {
-                            InternalUserMessage first_message = await BuildUserMessage(db, edited_message);
-                            sender.messages.Add(first_message);
-                        }
-                        else
-                        {
-                            InternalUserMessage edited_message_final = target_message with { text = msg.message.ToString() ?? "NULL" };
-                            sender.messages.Add(edited_message_final);
-                        }
-                        Log($"Edited message in chat ID: {sender.Id}, User: {sender.name} {sender.username}, Text: {edited_message.message}");
-                        db.SaveChanges();
-                    }
+                    await SaveNewMessage(msg.message);
                     break;
 
                 case UpdateReadHistoryOutbox msg:
                     Log($"The interlocutor in chat ID: {msg.peer.ID} has read messages up to message ID: {msg.max_id}");
                     break;
 
-                case UpdateUserStatus msg:
+                case UpdateUserStatus msg: 
                     Log($"Received UpdateUserStatus in chat ID: {msg.user_id}");
                     break;
 

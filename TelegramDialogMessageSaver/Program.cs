@@ -9,12 +9,12 @@ internal class MainApplication
         {
             phone = "",
             api_hash = "",
-            api_id = ,
+            api_id = 0,
             F2A_password = ""
         };
 
-        MainAccountHandler handler = new MainAccountHandler(login_data);
-        await handler.LoginTGAsync();
-        await handler.StartPollingAsync();
+        MainAccountHandler handler = new MainAccountHandler();
+        await handler.LoginTGAsync(login_data);
+        await handler.StartPollingAsync(new() { });
     }
 }
