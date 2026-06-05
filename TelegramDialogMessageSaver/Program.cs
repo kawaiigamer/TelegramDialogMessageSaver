@@ -13,7 +13,7 @@ internal class MainApplication
             F2A_password = ""
         };
 
-        MainAccountHandler handler = new MainAccountHandler();
+        MainAccountHandler handler = new();
         await handler.LoginTGAsync(login_data);
         await handler.StartPollingAsync(new() { });
     }
