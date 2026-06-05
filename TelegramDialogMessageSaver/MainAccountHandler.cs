@@ -163,15 +163,15 @@ namespace TelegramDialogMessageSaver
                                 new_message.media_hash = -1;
                                 Log($"Recived MessageMediaDocument is too big for it type {media_type} - {doc.size} bytes");
                                 break;
-                            }
-                            new_message.media_hash = doc.access_hash;
-                            InternalUserMessageMedia media = new() { hash = new_message.media_hash, media_type = media_type, media = await DownloadDocument(async (memory_stream) => await client.DownloadFileAsync(doc, memory_stream)) };
+                            }                            
+                            InternalUserMessageMedia media = new() { hash = doc.access_hash, media_type = media_type, media = await DownloadDocument(async (memory_stream) => await client.DownloadFileAsync(doc, memory_stream)) };
                             await db.Media.AddAsync(media);
-                            Log($"Reciving MessageMediaDocument: {media.media_type} - {new_message.media_hash}");
+                            Log($"Reciving MessageMediaDocument: {media.media_type} - {media.hash}");
                         } else
                         {
-                            Log($"Recived already saved MessageMediaDocument: {new_message.media_hash}");
+                            Log($"Recived already saved MessageMediaDocument: {doc.access_hash}");
                         }
+						new_message.media_hash = doc.access_hash;
                     }                    
                     break;
 
