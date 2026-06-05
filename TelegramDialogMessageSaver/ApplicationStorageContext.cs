@@ -14,7 +14,7 @@ namespace TelegramDialogMessageSaver
         public ApplicationStorageContext(string path)
         {
             database_path = path;
-            Database.EnsureCreatedAsync();
+            Database.EnsureCreated();
         }
 
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
