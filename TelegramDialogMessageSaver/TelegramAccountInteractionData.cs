@@ -1,6 +1,6 @@
 ﻿namespace TelegamSaver
 {
-    internal record TelegramAccountInterractionData
+    internal record TelegramAccountInteractionData
     {
         public string phone;
         public string F2A_password;

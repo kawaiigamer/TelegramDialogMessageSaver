@@ -4,7 +4,8 @@
     {
         public HashSet<long>? CHATS_IDS;
         public HashSet<long>? CHANNELS_IDS;
-        public int MAX_DOWNLOADS = 16;
+        //public int MAX_DB_OPERATIONS_BEFORE_SAVE = 36;
+        public int MAX_CONCURRENT_DOWNLOADS = 16;
         public int MAX_SYMBOLS_FOR_DISPLAY = 128;
         public string DATETIME_FORMAT = "dd.MM.yyyy HH:mm:ss";
         public string DATABASE_PATH = "TelegramChatMessages.db";

@@ -5,7 +5,7 @@ internal class MainApplication
 {
     public static async Task Main(string[] args)
     {
-        var login_data = new TelegramAccountInterractionData
+        var login_data = new TelegramAccountInteractionData
         {
             phone = "",
             api_hash = "",
